@@ -8,6 +8,7 @@ set -euo pipefail
 #   sudo ./teleport-labeler.sh remove KEY [--config PATH] [--service NAME] [--dry-run]
 #   sudo ./teleport-labeler.sh snapshot
 #   sudo ./teleport-labeler.sh create-develop [--ssh-key "ssh-ed25519 AAA..."] [--no-sudo]
+#   sudo ./teleport-labeler.sh set-standard --env ENV --project NAME --location LOCATION --access ACCESS [--config PATH] [--service NAME] [--dry-run]
 #
 # Defaults: auto-detect config path and systemd service name.
 
@@ -19,6 +20,10 @@ CANDIDATE_CONFIGS=(
   /etc/teleport.d/config.yaml
   /etc/teleport/config.yaml
 )
+ALLOWED_ENV=(prod stage dev lab)
+ALLOWED_PROJECT_PLACEHOLDER="customer-xyz|bluepolicy|teleport|..."
+ALLOWED_LOCATION=(col fra azure-westeu home)
+ALLOWED_ACCESS=(dev admin-only)
 LOG_PATH=${LOG_PATH:-/var/log/teleport-labeler.log}
 
 log() { printf '%s\n' "$*"; }
@@ -108,6 +113,16 @@ find_service() {
   fi
   # Fallback
   echo "teleport.service"
+}
+
+require_in_set() {
+  local value="$1"; shift
+  for allowed in "$@"; do
+    if [[ "$value" == "$allowed" ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 snapshot_users_and_keys() {
@@ -216,8 +231,43 @@ PY
 }
 
 restart_service() {
+
+python_set_standard() {
+  local env="$1"
+  local project="$2"
+  local location="$3"
+  local access="$4"
+  local path="$5"
+  python3 - "$env" "$project" "$location" "$access" "$path" <<'PY'
+import sys
+import yaml
+from pathlib import Path
+
+env, project, location, access, path = sys.argv[1:6]
   local svc="$1"
+if not cfg_path.exists():
+  sys.exit(f"Config not found: {path}")
+
+data = yaml.safe_load(cfg_path.read_text()) or {}
+ssh = data.get("ssh_service", {})
+labels = ssh.get("labels", {})
+if labels is None:
+  labels = {}
+if not isinstance(labels, dict):
+  sys.exit("labels must be a mapping in ssh_service")
+
+labels.update({
+  "env": env,
+  "project": project,
+  "location": location,
+  "access": access,
+})
+ssh["labels"] = labels
+data["ssh_service"] = ssh
+
   if command -v systemctl >/dev/null 2>&1; then
+PY
+}
     systemctl restart "$svc"
     systemctl status "$svc" --no-pager --lines=5 || true
   else
@@ -271,6 +321,10 @@ main() {
   local dry_run=0
   local ssh_key_arg=""
   local grant_sudo=1
+  local env_arg=""
+  local project_arg=""
+  local location_arg=""
+  local access_arg=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --config)
@@ -283,6 +337,14 @@ main() {
         ssh_key_arg="$2"; shift 2;;
       --no-sudo)
         grant_sudo=0; shift;;
+      --env)
+        env_arg="$2"; shift 2;;
+      --project)
+        project_arg="$2"; shift 2;;
+      --location)
+        location_arg="$2"; shift 2;;
+      --access)
+        access_arg="$2"; shift 2;;
       *) break;;
     esac
   done
@@ -314,6 +376,8 @@ main() {
     remove)
       if [[ $# -lt 1 ]]; then err "remove requires KEY"; exit 1; fi
       arg="$1"; shift;;
+    set-standard)
+      :;;
     list)
       :;;
     *)
@@ -323,6 +387,32 @@ main() {
 
   local cfg=$(find_config "$cfg_override")
   local svc=$(find_service "$svc_override")
+
+  if [[ "$cmd" == "set-standard" ]]; then
+    if [[ -z "$env_arg" || -z "$project_arg" || -z "$location_arg" || -z "$access_arg" ]]; then
+      err "set-standard requires --env --project --location --access"
+      err "Allowed env: ${ALLOWED_ENV[*]}"
+      err "Allowed location: ${ALLOWED_LOCATION[*]}"
+      err "Allowed access: ${ALLOWED_ACCESS[*]}"
+      exit 1
+    fi
+    if ! require_in_set "$env_arg" "${ALLOWED_ENV[@]}"; then
+      err "Invalid env '$env_arg'. Allowed: ${ALLOWED_ENV[*]}"; exit 1; fi
+    if ! require_in_set "$location_arg" "${ALLOWED_LOCATION[@]}"; then
+      err "Invalid location '$location_arg'. Allowed: ${ALLOWED_LOCATION[*]}"; exit 1; fi
+    if ! require_in_set "$access_arg" "${ALLOWED_ACCESS[@]}"; then
+      err "Invalid access '$access_arg'. Allowed: ${ALLOWED_ACCESS[*]}"; exit 1; fi
+    if [[ -z "$project_arg" ]]; then
+      err "project cannot be empty (e.g., bluepolicy|teleport|customer-xyz)"; exit 1; fi
+    backup_config "$cfg"
+    python_set_standard "$env_arg" "$project_arg" "$location_arg" "$access_arg" "$cfg"
+    if [[ $dry_run -eq 1 ]]; then
+      log "Dry run: standard labels written, service not restarted. (service: $svc)"
+    else
+      restart_service "$svc"
+    fi
+    exit 0
+  fi
 
   if [[ "$cmd" == "list" ]]; then
     python_edit list "" "$cfg"
