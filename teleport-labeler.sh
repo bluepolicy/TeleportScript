@@ -1074,13 +1074,22 @@ run_wizard() {
     log "[✓] User 'develop' exists"
   else
     log "[!] User 'develop' does NOT exist"
-    printf "Create 'develop' user with sudo? [Y/n]: "
+    printf "Create 'develop' user? [Y/n]: "
     set +e
     IFS= read -r do_user <&"$prompt_fd"
     set -e
     if [[ -z "$do_user" || "$do_user" =~ ^[Yy] ]]; then
-      create_develop_user "" 1
-      log "User 'develop' created with sudo access."
+      printf "Give 'develop' sudo privileges? [y/N]: "
+      set +e
+      IFS= read -r do_sudo <&"$prompt_fd"
+      set -e
+      if [[ "$do_sudo" =~ ^[Yy] ]]; then
+        create_develop_user "" 1
+        log "User 'develop' created WITH sudo access."
+      else
+        create_develop_user "" 0
+        log "User 'develop' created WITHOUT sudo access."
+      fi
     else
       log "Skipping user creation."
     fi
