@@ -379,19 +379,36 @@ main() {
       --service)
         svc_override="$2"; shift 2;;
       --dry-run)
-        dry_run=1; shift;;
+    set +e
+    read -r -p " env: " env_arg < "$prompt_src"
+    local rc=$?
+    set -e
+    if [[ $rc -ne 0 || -z "$env_arg" ]]; then
+      err "env is required (pass --env if piping without TTY)"; exit 1; fi
       --ssh-key)
         ssh_key_arg="$2"; shift 2;;
-      --no-sudo)
-        grant_sudo=0; shift;;
+    set +e
+    read -r -p " project: " project_arg < "$prompt_src"
+    rc=$?
+    set -e
+    if [[ $rc -ne 0 || -z "$project_arg" ]]; then
+      err "project is required (pass --project if piping without TTY)"; exit 1; fi
       --env)
         env_arg="$2"; shift 2;;
-      --project)
-        project_arg="$2"; shift 2;;
+    set +e
+    read -r -p " location: " location_arg < "$prompt_src"
+    rc=$?
+    set -e
+    if [[ $rc -ne 0 || -z "$location_arg" ]]; then
+      err "location is required (pass --location if piping without TTY)"; exit 1; fi
       --location)
         location_arg="$2"; shift 2;;
-      --access)
-        access_arg="$2"; shift 2;;
+    set +e
+    read -r -p " access: " access_arg < "$prompt_src"
+    rc=$?
+    set -e
+    if [[ $rc -ne 0 || -z "$access_arg" ]]; then
+      err "access is required (pass --access if piping without TTY)"; exit 1; fi
       --section)
         section_name="$2"; shift 2;;
       *) break;;
