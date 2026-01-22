@@ -514,6 +514,8 @@ ensure_pyyaml() {
 
 # ============== INSTALL TELEPORT ==============
 
+DEFAULT_PROXY="teleport.bluepolicy.ai:443"
+
 prompt_install_inputs() {
   local prompt_fd=0
   if [[ ! -t 0 ]]; then
@@ -527,13 +529,14 @@ prompt_install_inputs() {
   fi
 
   if [[ -z "$INSTALL_PROXY" ]]; then
-    log "Enter Teleport proxy server (e.g., teleport.example.com:443):"
+    log "Proxy server [${DEFAULT_PROXY}]:"
     printf " proxy: "
     set +e
     IFS= read -r INSTALL_PROXY <&"$prompt_fd"
     set -e
     if [[ -z "$INSTALL_PROXY" ]]; then
-      err "Proxy server is required"; exit 1
+      INSTALL_PROXY="$DEFAULT_PROXY"
+      log " → using default: $INSTALL_PROXY"
     fi
   fi
 
