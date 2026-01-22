@@ -1,6 +1,6 @@
 # Teleport Labeler
 
-Bash helper for Debian/Ubuntu/Rocky (systemd) to list/add/remove Teleport static SSH labels, log users/keys, and optionally create a `develop` user. It auto-detects Teleport config and service, backs up the config before edits, and restarts Teleport unless `--dry-run` is set.
+Bash helper for Debian/Ubuntu/Rocky (systemd) to list/add/remove Teleport static labels (SSH, App, Windows Desktop), log users/keys, and optionally create a `develop` user. It auto-detects Teleport config and service, backs up the config before edits, and restarts Teleport unless `--dry-run` is set.
 
 ## Quick one-liner (run as root)
 
@@ -13,18 +13,19 @@ Swap `list` for other commands below. Set `LOG_PATH` env to override the log loc
 
 ## Commands
 
-- List labels: `sudo ./teleport-labeler.sh list [--config PATH] [--service NAME]`
-- Add label: `sudo ./teleport-labeler.sh add env=prod [--config PATH] [--service NAME] [--dry-run]`
-- Remove label: `sudo ./teleport-labeler.sh remove env [--config PATH] [--service NAME] [--dry-run]`
+- List labels: `sudo ./teleport-labeler.sh list [--config PATH] [--service NAME] [--section ssh|app|windows]`
+- Add label: `sudo ./teleport-labeler.sh add env=prod [--config PATH] [--service NAME] [--section ssh|app|windows] [--dry-run]`
+- Remove label: `sudo ./teleport-labeler.sh remove env [--config PATH] [--service NAME] [--section ssh|app|windows] [--dry-run]`
 - Snapshot users and SSH keys to log: `sudo ./teleport-labeler.sh snapshot`
 - Ensure `develop` user: `sudo ./teleport-labeler.sh create-develop [--ssh-key "ssh-ed25519 AAA..."] [--no-sudo]`
-- Apply standard label set: `sudo ./teleport-labeler.sh set-standard [--env ENV --project NAME --location LOCATION --access ACCESS] [--config PATH] [--service NAME] [--dry-run]` (omitting values triggers interactive prompts)
+- Apply standard label set: `sudo ./teleport-labeler.sh set-standard [--env ENV --project NAME --location LOCATION --access ACCESS] [--config PATH] [--service NAME] [--section ssh|app|windows] [--dry-run]` (omitting values triggers interactive prompts)
+- Show Teleport config: `sudo ./teleport-labeler.sh show-config [--config PATH]`
 
 ## What it does
 
 - Finds Teleport config in common paths or a provided `--config`.
 - Backs up the config before label changes.
-- Uses Python+PyYAML to edit `ssh_service.labels`.
+- Uses Python+PyYAML to edit labels for the chosen section (default `ssh_service`; optional `app_service` or `windows_desktop_service` via `--section`).
 - Restarts the Teleport systemd unit (or skip with `--dry-run`).
 - Writes a snapshot of local users, their `authorized_keys`, and host SSH pubkeys to the log file.
 
