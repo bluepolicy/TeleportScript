@@ -550,6 +550,11 @@ INSTALL_TOKEN="${INSTALL_TOKEN:-}"
 
 prompt_install_inputs() {
   local prompt_fd=0
+  local env_arg="${env_arg:-}"
+  local project_arg="${project_arg:-}"
+  local location_arg="${location_arg:-}"
+  local access_arg="${access_arg:-}"
+  
   if [[ ! -t 0 ]]; then
     if [[ -e /dev/tty ]]; then
       exec 3</dev/tty
