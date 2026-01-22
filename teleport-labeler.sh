@@ -545,6 +545,8 @@ ensure_pyyaml() {
 # ============== INSTALL TELEPORT ==============
 
 DEFAULT_PROXY="teleport.bluepolicy.ai:443"
+INSTALL_PROXY="${INSTALL_PROXY:-}"
+INSTALL_TOKEN="${INSTALL_TOKEN:-}"
 
 prompt_install_inputs() {
   local prompt_fd=0
