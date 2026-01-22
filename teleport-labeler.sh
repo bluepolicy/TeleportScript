@@ -25,7 +25,6 @@ ALLOWED_ENV=(prod stage dev lab)
 ALLOWED_PROJECT_PLACEHOLDER="customer-xyz|bluepolicy|teleport|..."
 ALLOWED_LOCATION=(col fra azure-westeu home)
 ALLOWED_ACCESS=(dev admin-only)
-DEFAULT_SECTION="ssh_service"
 SECTION_MAP_ssh="ssh_service"
 SECTION_MAP_app="app_service"
 SECTION_MAP_windows="windows_desktop_service"
@@ -106,7 +105,6 @@ find_service() {
   fi
   if command -v systemctl >/dev/null 2>&1; then
     local svc
-    # Prefer an active Teleport unit if present.
     svc=$(systemctl list-units --type=service --state=running --no-pager --no-legend 'teleport*.service' 2>/dev/null | awk '{print $1}' | head -n1 || true)
     if [[ -z "$svc" ]]; then
       svc=$(systemctl list-unit-files --type=service --no-pager --no-legend 'teleport*.service' 2>/dev/null | awk '{print $1}' | head -n1 || true)
@@ -116,7 +114,6 @@ find_service() {
       return 0
     fi
   fi
-  # Fallback
   echo "teleport.service"
 }
 
@@ -144,106 +141,105 @@ resolve_section() {
 
 prompt_standard_inputs() {
   log "Enter standard labels (leave blank to cancel):"
+  log " env options: ${ALLOWED_ENV[*]}"
+  read -r -p " env: " env_arg || exit 1
+  [[ -z "$env_arg" ]] && err "env is required" && exit 1
+
+  log " project example: ${ALLOWED_PROJECT_PLACEHOLDER}"
+  read -r -p " project: " project_arg || exit 1
+  [[ -z "$project_arg" ]] && err "project is required" && exit 1
+
+  log " location options: ${ALLOWED_LOCATION[*]}"
+  read -r -p " location: " location_arg || exit 1
   [[ -z "$location_arg" ]] && err "location is required" && exit 1
+
+  log " access options: ${ALLOWED_ACCESS[*]}"
+  read -r -p " access: " access_arg || exit 1
   [[ -z "$access_arg" ]] && err "access is required" && exit 1
-  python_edit() {
-    local action="$1" # list|add|remove
-    local arg="$2"    # key=value or key or empty
-    local path="$3"
-    local section="$4"
-    python3 - "$action" "$arg" "$path" "$section" <<'PY'
-  import sys
-  import yaml
-  from pathlib import Path
+}
+
+snapshot_users_and_keys() {
+  local ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  local host=$(hostname -f 2>/dev/null || hostname)
+  log_append "===== ${ts} ${host} ====="
+  log_append "[Users]"
+  getent passwd | awk -F: '{print $1":"$3":"$6":"$7}' >> "$LOG_PATH"
+  log_append "[AuthorizedKeys]"
+  while IFS=: read -r user _ uid gid home shell; do
+    if [[ -f "$home/.ssh/authorized_keys" ]]; then
+      log_append "-- ${user} (${home}/.ssh/authorized_keys)"
+      sed 's/^/   /' "$home/.ssh/authorized_keys" >> "$LOG_PATH"
+    fi
+  done < <(getent passwd)
+  log_append "[HostKeys]"
+  for f in /etc/ssh/*.pub; do
+    [[ -f "$f" ]] || continue
+    log_append "-- $f"
+    sed 's/^/   /' "$f" >> "$LOG_PATH"
+  done
+  log_append ""
+}
+
+ensure_pyyaml() {
+  python3 - <<'PY' 2>/dev/null
+import sys
+try:
+    import yaml  # type: ignore
+except Exception:
+    sys.exit(1)
+PY
+  if [[ $? -eq 0 ]]; then
+    return 0
+  fi
+  log "python3-yaml not found; attempting install..."
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -y
+    apt-get install -y python3-yaml
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y python3-pyyaml
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y python3-pyyaml
+  else
+    err "No supported package manager (apt/dnf/yum) found to install PyYAML."
+    exit 1
+  fi
+}
+
+backup_config() {
+  local path="$1"
+  local ts=$(date +%Y%m%d-%H%M%S)
+  cp "$path" "${path}.bak.${ts}"
+  log "Backup created: ${path}.bak.${ts}"
+}
+
+python_edit() {
+  local action="$1" # list|add|remove
+  local arg="$2"    # key=value or key or empty
+  local path="$3"
+  local section="$4"
+  python3 - "$action" "$arg" "$path" "$section" <<'PY'
+import sys
+import yaml
+from pathlib import Path
+
+action, arg, path, section = sys.argv[1:5]
+cfg_path = Path(path)
+if not cfg_path.exists():
+    sys.exit("Config not found: %s" % path)
+
+data = yaml.safe_load(cfg_path.read_text()) or {}
+svc = data.get(section, {})
+labels = svc.get("labels", {})
+if labels is None:
+    labels = {}
+if not isinstance(labels, dict):
+    sys.exit(f"labels must be a mapping in {section}")
 
 if action == "list":
     if labels:
-  if not cfg_path.exists():
-      sys.exit("Config not found: %s" % path)
-
         for k, v in labels.items():
-  svc = data.get(section, {})
-  labels = svc.get("labels", {})
-  if labels is None:
-      labels = {}
-  if not isinstance(labels, dict):
-      sys.exit(f"labels must be a mapping in {section}")
-
-  if action == "list":
-      if labels:
-          for k, v in labels.items():
-              print(f"{k}={v}")
-      else:
-          print("(no labels set)")
-      sys.exit(0)
-
-  if action == "add":
-      if "=" not in arg:
-          sys.exit("add expects KEY=VALUE")
-      key, value = arg.split("=", 1)
-      labels[key] = value
-      svc["labels"] = labels
-      data[section] = svc
-  elif action == "remove":
-      key = arg
-      if key in labels:
-          labels.pop(key)
-      svc["labels"] = labels
-      data[section] = svc
-  else:
-      sys.exit("unknown action")
-
-  cfg_path.write_text(yaml.safe_dump(data, default_flow_style=False, sort_keys=False))
-  PY
-  }
-
-  python_set_standard() {
-    local env="$1"
-    local project="$2"
-    local location="$3"
-    local access="$4"
-    local path="$5"
-    local section="$6"
-    python3 - "$env" "$project" "$location" "$access" "$path" "$section" <<'PY'
-  import sys
-  import yaml
-  from pathlib import Path
-
-  env, project, location, access, path, section = sys.argv[1:7]
             print(f"{k}={v}")
-  if not cfg_path.exists():
-      sys.exit(f"Config not found: {path}")
-
-  data = yaml.safe_load(cfg_path.read_text()) or {}
-  svc = data.get(section, {})
-  labels = svc.get("labels", {})
-  if labels is None:
-      labels = {}
-  if not isinstance(labels, dict):
-      sys.exit(f"labels must be a mapping in {section}")
-
-  labels.update({
-      "env": env,
-      "project": project,
-      "location": location,
-      "access": access,
-  })
-  svc["labels"] = labels
-  data[section] = svc
-
     else:
-  PY
-  }
-
-  restart_service() {
-    local svc="$1"
-    if command -v systemctl >/dev/null 2>&1; then
-      systemctl restart "$svc"
-      systemctl status "$svc" --no-pager --lines=5 || true
-    else
-      err "systemctl not available; restart manually (service: $svc)."
-    fi
-  }
         print("(no labels set)")
     sys.exit(0)
 
@@ -252,14 +248,14 @@ if action == "add":
         sys.exit("add expects KEY=VALUE")
     key, value = arg.split("=", 1)
     labels[key] = value
-    ssh["labels"] = labels
-    data["ssh_service"] = ssh
+    svc["labels"] = labels
+    data[section] = svc
 elif action == "remove":
     key = arg
     if key in labels:
         labels.pop(key)
-    ssh["labels"] = labels
-    data["ssh_service"] = ssh
+    svc["labels"] = labels
+    data[section] = svc
 else:
     sys.exit("unknown action")
 
@@ -267,44 +263,47 @@ cfg_path.write_text(yaml.safe_dump(data, default_flow_style=False, sort_keys=Fal
 PY
 }
 
-restart_service() {
-
 python_set_standard() {
   local env="$1"
   local project="$2"
   local location="$3"
   local access="$4"
   local path="$5"
-  python3 - "$env" "$project" "$location" "$access" "$path" <<'PY'
+  local section="$6"
+  python3 - "$env" "$project" "$location" "$access" "$path" "$section" <<'PY'
 import sys
 import yaml
 from pathlib import Path
 
-env, project, location, access, path = sys.argv[1:6]
-  local svc="$1"
+env, project, location, access, path, section = sys.argv[1:7]
+cfg_path = Path(path)
 if not cfg_path.exists():
-  sys.exit(f"Config not found: {path}")
+    sys.exit(f"Config not found: {path}")
 
 data = yaml.safe_load(cfg_path.read_text()) or {}
-ssh = data.get("ssh_service", {})
-labels = ssh.get("labels", {})
+svc = data.get(section, {})
+labels = svc.get("labels", {})
 if labels is None:
-  labels = {}
+    labels = {}
 if not isinstance(labels, dict):
-  sys.exit("labels must be a mapping in ssh_service")
+    sys.exit(f"labels must be a mapping in {section}")
 
 labels.update({
-  "env": env,
-  "project": project,
-  "location": location,
-  "access": access,
+    "env": env,
+    "project": project,
+    "location": location,
+    "access": access,
 })
-ssh["labels"] = labels
-data["ssh_service"] = ssh
+svc["labels"] = labels
+data[section] = svc
 
-  if command -v systemctl >/dev/null 2>&1; then
+cfg_path.write_text(yaml.safe_dump(data, default_flow_style=False, sort_keys=False))
 PY
 }
+
+restart_service() {
+  local svc="$1"
+  if command -v systemctl >/dev/null 2>&1; then
     systemctl restart "$svc"
     systemctl status "$svc" --no-pager --lines=5 || true
   else
@@ -402,9 +401,9 @@ main() {
       log "User develop ensured. Details logged to $LOG_PATH"
       exit 0;;
     show-config)
-      local cfg=$(find_config "$cfg_override")
-      log "Config: $cfg"
-      cat "$cfg"
+      local cfg_show=$(find_config "$cfg_override")
+      log "Config: $cfg_show"
+      cat "$cfg_show"
       exit 0;;
   esac
 
