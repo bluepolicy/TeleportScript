@@ -837,13 +837,14 @@ create_develop_user() {
   local ssh_key="$1"
   local grant_sudo="$2"
   require_cmd useradd
-  require_cmd passwd
   require_cmd getent
   require_cmd usermod
   if ! id -u develop >/dev/null 2>&1; then
     useradd -m -s /bin/bash develop
+    log "User 'develop' created."
+  else
+    log "User 'develop' already exists."
   fi
-  passwd -l develop || true
   if [[ "$grant_sudo" -eq 1 ]]; then
     if getent group sudo >/dev/null 2>&1; then
       usermod -aG sudo develop || true
