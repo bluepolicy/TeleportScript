@@ -875,11 +875,21 @@ create_develop_user() {
     log "User 'develop' already exists."
   fi
   if [[ "$grant_sudo" -eq 1 ]]; then
-    if getent group sudo >/dev/null 2>&1; then
-      usermod -aG sudo develop || true
-    elif getent group wheel >/dev/null 2>&1; then
-      usermod -aG wheel develop || true
+    if getent group wheel >/dev/null 2>&1; then
+      usermod -aG wheel develop
+      log "User 'develop' added to wheel group (sudo)."
+    elif getent group sudo >/dev/null 2>&1; then
+      usermod -aG sudo develop
+      log "User 'develop' added to sudo group."
+    else
+      log "WARNING: No sudo/wheel group found!"
     fi
+  fi
+  # Verify sudo membership
+  if groups develop 2>/dev/null | grep -qE '(sudo|wheel)'; then
+    log "[✓] User 'develop' has sudo privileges."
+  else
+    log "[!] User 'develop' does NOT have sudo privileges."
   fi
   local key_set=0
   if [[ -n "$ssh_key" ]]; then
