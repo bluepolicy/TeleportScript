@@ -893,17 +893,69 @@ create_develop_user() {
   log_append "create-develop: ensured user develop (sudo=${grant_sudo}, ssh_key_set=${key_set})"
 }
 
+show_main_menu() {
+  local prompt_fd=0
+  if [[ ! -t 0 ]]; then
+    if [[ -e /dev/tty ]]; then
+      exec 3</dev/tty
+      prompt_fd=3
+    else
+      err "No TTY for interactive menu. Use command: install|list|add|remove|set-standard|snapshot|show-config"
+      exit 1
+    fi
+  fi
+
+  log ""
+  log "===== Teleport Label Manager ====="
+  log ""
+  log "  [1] list          - Show all labels (SSH/App/Windows)"
+  log "  [2] set-standard  - Set standard labels (env/project/location/access)"
+  log "  [3] add           - Add a custom label"
+  log "  [4] remove        - Remove labels (interactive)"
+  log "  [5] snapshot      - Show users and SSH keys"
+  log "  [6] show-config   - Display Teleport config"
+  log "  [7] install       - Install Teleport on new server"
+  log "  [8] create-develop - Create develop user"
+  log "  [0] exit"
+  log ""
+  printf "Select [0-8]: "
+  
+  set +e
+  IFS= read -r choice <&"$prompt_fd"
+  set -e
+
+  case "$choice" in
+    1) echo "list";;
+    2) echo "set-standard";;
+    3) echo "add";;
+    4) echo "remove";;
+    5) echo "snapshot";;
+    6) echo "show-config";;
+    7) echo "install";;
+    8) echo "create-develop";;
+    0|"") echo "exit";;
+    *) err "Invalid choice"; exit 1;;
+  esac
+}
+
 main() {
   need_root
   check_supported_os
   ensure_log_file
 
+  local cmd=""
+  
+  # If no arguments, show interactive menu
   if [[ $# -lt 1 ]]; then
-    err "Usage: $0 <install|list|add|remove|set-standard|snapshot|create-develop|show-config> ..."
-    exit 1
+    cmd=$(show_main_menu)
+    if [[ "$cmd" == "exit" ]]; then
+      log "Bye!"
+      exit 0
+    fi
+  else
+    cmd="$1"; shift || true
   fi
 
-  local cmd="$1"; shift || true
   local cfg_override=""
   local svc_override=""
   local dry_run=0
