@@ -140,21 +140,31 @@ resolve_section() {
 }
 
 prompt_standard_inputs() {
+  local prompt_src=""
+  if [[ -t 0 ]]; then
+    prompt_src="/dev/stdin"
+  elif [[ -r /dev/tty ]]; then
+    prompt_src="/dev/tty"
+  else
+    err "No TTY available for prompts. Provide --env/--project/--location/--access flags."
+    exit 1
+  fi
+
   log "Enter standard labels (leave blank to cancel):"
   log " env options: ${ALLOWED_ENV[*]}"
-  read -r -p " env: " env_arg || exit 1
+  read -r -p " env: " env_arg < "$prompt_src" || exit 1
   [[ -z "$env_arg" ]] && err "env is required" && exit 1
 
   log " project example: ${ALLOWED_PROJECT_PLACEHOLDER}"
-  read -r -p " project: " project_arg || exit 1
+  read -r -p " project: " project_arg < "$prompt_src" || exit 1
   [[ -z "$project_arg" ]] && err "project is required" && exit 1
 
   log " location options: ${ALLOWED_LOCATION[*]}"
-  read -r -p " location: " location_arg || exit 1
+  read -r -p " location: " location_arg < "$prompt_src" || exit 1
   [[ -z "$location_arg" ]] && err "location is required" && exit 1
 
   log " access options: ${ALLOWED_ACCESS[*]}"
-  read -r -p " access: " access_arg || exit 1
+  read -r -p " access: " access_arg < "$prompt_src" || exit 1
   [[ -z "$access_arg" ]] && err "access is required" && exit 1
 }
 
