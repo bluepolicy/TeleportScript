@@ -132,10 +132,10 @@ require_in_set() {
 resolve_section() {
   local name="$1"
   case "$name" in
-    ""|ssh) echo "$SECTION_MAP_ssh";;
+    ssh) echo "$SECTION_MAP_ssh";;
     app) echo "$SECTION_MAP_app";;
     windows) echo "$SECTION_MAP_windows";;
-    all) echo "all";;
+    ""|all) echo "all";;  # Default to all (interactive)
     *)
       err "Unknown section '$name'. Allowed: ssh, app, windows, all"
       exit 1;;
@@ -163,6 +163,85 @@ for sec in sections:
     if labels and isinstance(labels, dict):
         print(sec)
 PYEOF
+}
+
+# Get all sections that exist in config (with or without labels)
+get_all_sections_in_config() {
+  local path="$1"
+  python3 - "$path" <<'PYEOF'
+import sys
+import yaml
+from pathlib import Path
+
+path = sys.argv[1]
+cfg_path = Path(path)
+if not cfg_path.exists():
+    sys.exit(1)
+data = yaml.safe_load(cfg_path.read_text()) or {}
+
+sections = ["ssh_service", "app_service", "windows_desktop_service"]
+for sec in sections:
+    if sec in data:
+        print(sec)
+PYEOF
+}
+
+# Interactive section picker
+prompt_section_choice() {
+  local path="$1"
+  local prompt_fd=0
+
+  if [[ ! -t 0 ]]; then
+    if [[ -e /dev/tty ]]; then
+      exec 3</dev/tty
+      prompt_fd=3
+    else
+      err "No TTY. Use --section ssh|app|windows"
+      exit 1
+    fi
+  fi
+
+  log "Available sections in config:"
+  local -a available_sections=()
+  local sec_i=1
+  while IFS= read -r sec; do
+    case "$sec" in
+      ssh_service) log "  [$sec_i] SSH Tunnel";;
+      app_service) log "  [$sec_i] App/Web Tunnel";;
+      windows_desktop_service) log "  [$sec_i] Windows RDP";;
+    esac
+    available_sections+=("$sec")
+    ((sec_i++))
+  done < <(get_all_sections_in_config "$path")
+
+  if [[ ${#available_sections[@]} -eq 0 ]]; then
+    log "No tunnel sections found in config. Using ssh_service."
+    SELECTED_SECTION="ssh_service"
+    return
+  fi
+
+  if [[ ${#available_sections[@]} -eq 1 ]]; then
+    SELECTED_SECTION="${available_sections[0]}"
+    log "Only one section found, using: $SELECTED_SECTION"
+    return
+  fi
+
+  log ""
+  printf "Select section [1-${#available_sections[@]}]: "
+  set +e
+  IFS= read -r sec_choice <&"$prompt_fd"
+  local rc=$?
+  set -e
+  if [[ $rc -ne 0 || -z "$sec_choice" ]]; then
+    SELECTED_SECTION="${available_sections[0]}"
+    log "No selection, defaulting to: $SELECTED_SECTION"
+    return
+  fi
+  if [[ ! "$sec_choice" =~ ^[0-9]+$ ]] || (( sec_choice < 1 || sec_choice > ${#available_sections[@]} )); then
+    err "Invalid selection"
+    exit 1
+  fi
+  SELECTED_SECTION="${available_sections[$((sec_choice-1))]}"
 }
 
 # List labels from all sections
@@ -666,6 +745,13 @@ main() {
   svc=$(find_service "$svc_override")
   section=$(resolve_section "$section_name")
 
+  # For add/set-standard with section=all, prompt for section choice
+  if [[ "$section" == "all" && ( "$cmd" == "add" || "$cmd" == "set-standard" ) ]]; then
+    SELECTED_SECTION=""
+    prompt_section_choice "$cfg"
+    section="$SELECTED_SECTION"
+  fi
+
   if [[ "$cmd" == "set-standard" ]]; then
     if [[ -z "$env_arg" || -z "$project_arg" || -z "$location_arg" || -z "$access_arg" ]]; then
       prompt_standard_inputs
@@ -723,6 +809,11 @@ main() {
       restart_service "$svc"
     fi
     exit 0
+  fi
+
+  # For add with section=all (shouldn't happen after prompt, but fallback)
+  if [[ "$section" == "all" ]]; then
+    section="ssh_service"
   fi
 
   backup_config "$cfg"
