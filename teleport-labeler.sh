@@ -5,7 +5,8 @@ set -euo pipefail
 # Usage:
 #   sudo ./teleport-labeler.sh list [--config PATH] [--service NAME] [--section ssh|app|windows]
 #   sudo ./teleport-labeler.sh add KEY=VALUE [--config PATH] [--service NAME] [--section ssh|app|windows] [--dry-run]
-#   sudo ./teleport-labeler.sh remove KEY [--config PATH] [--service NAME] [--section ssh|app|windows] [--dry-run]
+#   sudo ./teleport-labeler.sh remove [KEY] [--config PATH] [--service NAME] [--section ssh|app|windows] [--dry-run]
+#        (without KEY: interactive selection)
 #   sudo ./teleport-labeler.sh snapshot
 #   sudo ./teleport-labeler.sh create-develop [--ssh-key "ssh-ed25519 AAA..."] [--no-sudo]
 #   sudo ./teleport-labeler.sh set-standard [--env ENV --project NAME --location LOCATION --access ACCESS] [--config PATH] [--service NAME] [--section ssh|app|windows] [--dry-run]
@@ -192,6 +193,102 @@ prompt_standard_inputs() {
   if [[ $rc -ne 0 || -z "$access_arg" ]]; then
     err "access is required (pass --access if piping without TTY)"; exit 1
   fi
+}
+
+# Get labels as array via Python - returns "key=value" lines
+get_labels_list() {
+  local path="$1"
+  local section="$2"
+  python3 - "$path" "$section" <<'PYEOF'
+import sys
+import yaml
+from pathlib import Path
+
+path, section = sys.argv[1:3]
+cfg_path = Path(path)
+if not cfg_path.exists():
+    sys.exit(1)
+data = yaml.safe_load(cfg_path.read_text()) or {}
+svc = data.get(section, {})
+labels = svc.get("labels", {})
+if labels and isinstance(labels, dict):
+    for k, v in labels.items():
+        print(f"{k}={v}")
+PYEOF
+}
+
+prompt_remove_labels() {
+  local path="$1"
+  local section="$2"
+  local prompt_fd=0
+
+  if [[ ! -t 0 ]]; then
+    if [[ -e /dev/tty ]]; then
+      exec 3</dev/tty
+      prompt_fd=3
+    else
+      err "No TTY available for interactive removal. Use: remove KEY"
+      exit 1
+    fi
+  fi
+
+  # Get current labels
+  local labels_output
+  labels_output=$(get_labels_list "$path" "$section")
+  if [[ -z "$labels_output" ]]; then
+    log "No labels to remove."
+    exit 0
+  fi
+
+  # Build array of keys
+  local -a keys=()
+  local -a display=()
+  local i=1
+  while IFS= read -r line; do
+    local key="${line%%=*}"
+    keys+=("$key")
+    display+=("$line")
+    log "  [$i] $line"
+    ((i++))
+  done <<< "$labels_output"
+
+  log ""
+  log "Enter numbers to remove (comma-separated, e.g. 1,3) or 'all':"
+  printf " selection: "
+  set +e
+  IFS= read -r selection <&"$prompt_fd"
+  local rc=$?
+  set -e
+
+  if [[ $rc -ne 0 || -z "$selection" ]]; then
+    log "No selection made, exiting."
+    exit 0
+  fi
+
+  # Parse selection
+  local -a to_remove=()
+  if [[ "$selection" == "all" ]]; then
+    to_remove=("${keys[@]}")
+  else
+    IFS=',' read -ra nums <<< "$selection"
+    for num in "${nums[@]}"; do
+      num="${num// /}"  # trim spaces
+      if [[ "$num" =~ ^[0-9]+$ ]] && (( num >= 1 && num <= ${#keys[@]} )); then
+        to_remove+=("${keys[$((num-1))]}")
+      else
+        err "Invalid selection: $num"
+        exit 1
+      fi
+    done
+  fi
+
+  if [[ ${#to_remove[@]} -eq 0 ]]; then
+    log "Nothing selected."
+    exit 0
+  fi
+
+  # Return keys to remove (space-separated)
+  REMOVE_KEYS=("${to_remove[@]}")
 }
 
 snapshot_users_and_keys() {
@@ -445,13 +542,17 @@ main() {
   snapshot_users_and_keys
 
   local arg=""
+  local interactive_remove=0
   case "$cmd" in
     add)
       if [[ $# -lt 1 ]]; then err "add requires KEY=VALUE"; exit 1; fi
       arg="$1"; shift;;
     remove)
-      if [[ $# -lt 1 ]]; then err "remove requires KEY"; exit 1; fi
-      arg="$1"; shift;;
+      if [[ $# -lt 1 ]]; then
+        interactive_remove=1
+      else
+        arg="$1"; shift
+      fi;;
     set-standard)
       :;;
     list)
@@ -494,6 +595,26 @@ main() {
 
   if [[ "$cmd" == "list" ]]; then
     python_edit list "" "$cfg" "$section"
+    exit 0
+  fi
+
+  if [[ "$cmd" == "remove" && $interactive_remove -eq 1 ]]; then
+    log "Current labels:"
+    REMOVE_KEYS=()
+    prompt_remove_labels "$cfg" "$section"
+    if [[ ${#REMOVE_KEYS[@]} -eq 0 ]]; then
+      exit 0
+    fi
+    backup_config "$cfg"
+    for key in "${REMOVE_KEYS[@]}"; do
+      log "Removing: $key"
+      python_edit remove "$key" "$cfg" "$section"
+    done
+    if [[ $dry_run -eq 1 ]]; then
+      log "Dry run: changes written, service not restarted. (service: $svc)"
+    else
+      restart_service "$svc"
+    fi
     exit 0
   fi
 
