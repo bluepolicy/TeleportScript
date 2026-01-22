@@ -46,7 +46,8 @@ log_append() { printf '%s\n' "$*" >> "$LOG_PATH"; }
 
 need_root() {
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-    err "Run as root (sudo)."
+    err "Run with sudo or as root."
+    err "Example: sudo $0 $*"
     exit 1
   fi
 }
@@ -1036,48 +1037,32 @@ run_wizard() {
     if [[ -z "$do_labels" || "$do_labels" =~ ^[Yy] ]]; then
       local env_arg="" project_arg="" location_arg="" access_arg=""
       
-      log " env options: ${ALLOWED_ENV[*]}"
+      log " env (suggestions: ${ALLOWED_ENV[*]}): "
       printf " env: "
       set +e; IFS= read -r env_arg <&"$prompt_fd"; set -e
       
-      log " project example: ${ALLOWED_PROJECT_PLACEHOLDER}"
+      log " project (examples: ${ALLOWED_PROJECT_PLACEHOLDER}): "
       printf " project: "
       set +e; IFS= read -r project_arg <&"$prompt_fd"; set -e
       
-      log " location options: ${ALLOWED_LOCATION[*]}"
+      log " location (suggestions: ${ALLOWED_LOCATION[*]}): "
       printf " location: "
       set +e; IFS= read -r location_arg <&"$prompt_fd"; set -e
       
-      log " access options: ${ALLOWED_ACCESS[*]}"
+      log " access (suggestions: ${ALLOWED_ACCESS[*]}): "
       printf " access: "
       set +e; IFS= read -r access_arg <&"$prompt_fd"; set -e
 
+      # Accept any value - suggestions are just hints
       if [[ -n "$env_arg" && -n "$project_arg" && -n "$location_arg" && -n "$access_arg" ]]; then
-        local valid=1
-        if ! require_in_set "$env_arg" "${ALLOWED_ENV[@]}"; then
-          log "[!] Invalid env '$env_arg'. Allowed: ${ALLOWED_ENV[*]}"
-          valid=0
-        fi
-        if ! require_in_set "$location_arg" "${ALLOWED_LOCATION[@]}"; then
-          log "[!] Invalid location '$location_arg'. Allowed: ${ALLOWED_LOCATION[*]}"
-          valid=0
-        fi
-        if ! require_in_set "$access_arg" "${ALLOWED_ACCESS[@]}"; then
-          log "[!] Invalid access '$access_arg'. Allowed: ${ALLOWED_ACCESS[*]}"
-          valid=0
-        fi
-        if [[ $valid -eq 1 ]]; then
-          backup_config "$cfg"
-          python_set_standard "$env_arg" "$project_arg" "$location_arg" "$access_arg" "$cfg" "ssh_service"
-          local svc
-          svc=$(find_service "")
-          restart_service "$svc"
-          log "Labels updated!"
-        else
-          log "Skipping labels due to invalid values."
-        fi
+        backup_config "$cfg"
+        python_set_standard "$env_arg" "$project_arg" "$location_arg" "$access_arg" "$cfg" "ssh_service"
+        local svc
+        svc=$(find_service "")
+        restart_service "$svc"
+        log "Labels updated!"
       else
-        log "Incomplete input, skipping labels."
+        log "Incomplete input (all 4 required), skipping labels."
       fi
     fi
   fi
