@@ -926,18 +926,27 @@ run_wizard() {
   local teleport_installed=0
   local teleport_bin=""
   
-  # Check common locations
-  for bin in /usr/local/bin/teleport /usr/bin/teleport teleport; do
-    if command -v "$bin" >/dev/null 2>&1 || [[ -x "$bin" ]]; then
-      teleport_bin="$bin"
-      teleport_installed=1
-      break
-    fi
-  done
+  # Check common binary locations directly (PATH may not include /usr/local/bin in curl|bash)
+  if [[ -x /usr/local/bin/teleport ]]; then
+    teleport_bin="/usr/local/bin/teleport"
+    teleport_installed=1
+  elif [[ -x /usr/bin/teleport ]]; then
+    teleport_bin="/usr/bin/teleport"
+    teleport_installed=1
+  elif [[ -x /opt/teleport/system/bin/teleport ]]; then
+    teleport_bin="/opt/teleport/system/bin/teleport"
+    teleport_installed=1
+  elif command -v teleport >/dev/null 2>&1; then
+    teleport_bin="teleport"
+    teleport_installed=1
+  fi
   
-  # Also check if systemd service exists
+  # Also check if systemd service is running
   if [[ $teleport_installed -eq 0 ]] && command -v systemctl >/dev/null 2>&1; then
-    if systemctl list-unit-files 'teleport*.service' 2>/dev/null | grep -q teleport; then
+    if systemctl is-active teleport.service >/dev/null 2>&1; then
+      teleport_installed=1
+      teleport_bin="(service running)"
+    elif systemctl list-unit-files 'teleport*.service' 2>/dev/null | grep -q teleport; then
       teleport_installed=1
       teleport_bin="(service installed)"
     fi
