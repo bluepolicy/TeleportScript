@@ -926,19 +926,32 @@ run_wizard() {
   local teleport_installed=0
   local teleport_bin=""
   
+  log "[DEBUG] Checking for Teleport installation..."
+  log "[DEBUG] Checking /usr/local/bin/teleport: $(ls -la /usr/local/bin/teleport 2>&1 || echo 'not found')"
+  log "[DEBUG] Checking /opt/teleport/system/bin/teleport: $(ls -la /opt/teleport/system/bin/teleport 2>&1 || echo 'not found')"
+  log "[DEBUG] Checking systemctl is-active: $(systemctl is-active teleport.service 2>&1 || echo 'failed')"
+  log "[DEBUG] Checking config /etc/teleport.yaml: $(ls -la /etc/teleport.yaml 2>&1 || echo 'not found')"
+  log ""
+
   # Check common binary locations directly (PATH may not include /usr/local/bin in curl|bash)
   if [[ -x /usr/local/bin/teleport ]]; then
     teleport_bin="/usr/local/bin/teleport"
     teleport_installed=1
+    log "[DEBUG] Found via /usr/local/bin/teleport"
   elif [[ -x /usr/bin/teleport ]]; then
     teleport_bin="/usr/bin/teleport"
     teleport_installed=1
+    log "[DEBUG] Found via /usr/bin/teleport"
   elif [[ -x /opt/teleport/system/bin/teleport ]]; then
     teleport_bin="/opt/teleport/system/bin/teleport"
     teleport_installed=1
+    log "[DEBUG] Found via /opt/teleport/system/bin/teleport"
   elif command -v teleport >/dev/null 2>&1; then
     teleport_bin="teleport"
     teleport_installed=1
+    log "[DEBUG] Found via PATH"
+  else
+    log "[DEBUG] Binary not found in common locations"
   fi
   
   # Also check if systemd service is running
@@ -946,9 +959,11 @@ run_wizard() {
     if systemctl is-active teleport.service >/dev/null 2>&1; then
       teleport_installed=1
       teleport_bin="(service running)"
+      log "[DEBUG] Found via systemctl is-active"
     elif systemctl list-unit-files 'teleport*.service' 2>/dev/null | grep -q teleport; then
       teleport_installed=1
       teleport_bin="(service installed)"
+      log "[DEBUG] Found via systemctl list-unit-files"
     fi
   fi
   
@@ -958,10 +973,14 @@ run_wizard() {
       if [[ -f "$cfg" ]]; then
         teleport_installed=1
         teleport_bin="(config found: $cfg)"
+        log "[DEBUG] Found via config: $cfg"
         break
       fi
     done
   fi
+
+  log "[DEBUG] teleport_installed=$teleport_installed teleport_bin=$teleport_bin"
+  log ""
 
   if [[ $teleport_installed -eq 1 ]]; then
     local ver=""
