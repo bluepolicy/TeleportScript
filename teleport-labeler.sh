@@ -893,49 +893,143 @@ create_develop_user() {
   log_append "create-develop: ensured user develop (sudo=${grant_sudo}, ssh_key_set=${key_set})"
 }
 
-show_main_menu() {
+# ============== INTERACTIVE WIZARD ==============
+
+run_wizard() {
   local prompt_fd=0
   if [[ ! -t 0 ]]; then
     if [[ -e /dev/tty ]]; then
       exec 3</dev/tty
       prompt_fd=3
     else
-      err "No TTY for interactive menu. Use command: install|list|add|remove|set-standard|snapshot|show-config"
+      err "No TTY available. Use flags for automation."
       exit 1
     fi
   fi
 
   log ""
-  log "===== Teleport Label Manager ====="
+  log "===== Teleport Setup Wizard ====="
+  log "(Press Enter to skip any step)"
   log ""
-  log "  [1] list          - Show all labels (SSH/App/Windows)"
-  log "  [2] set-standard  - Set standard labels (env/project/location/access)"
-  log "  [3] add           - Add a custom label"
-  log "  [4] remove        - Remove labels (interactive)"
-  log "  [5] snapshot      - Show users and SSH keys"
-  log "  [6] show-config   - Display Teleport config"
-  log "  [7] install       - Install Teleport on new server"
-  log "  [8] create-develop - Create develop user"
-  log "  [0] exit"
-  log ""
-  printf "Select [0-8]: "
-  
-  set +e
-  IFS= read -r choice <&"$prompt_fd"
-  set -e
 
-  case "$choice" in
-    1) echo "list";;
-    2) echo "set-standard";;
-    3) echo "add";;
-    4) echo "remove";;
-    5) echo "snapshot";;
-    6) echo "show-config";;
-    7) echo "install";;
-    8) echo "create-develop";;
-    0|"") echo "exit";;
-    *) err "Invalid choice"; exit 1;;
-  esac
+  # Step 1: Check if Teleport is installed
+  local teleport_installed=0
+  if command -v teleport >/dev/null 2>&1; then
+    teleport_installed=1
+    log "[✓] Teleport is installed: $(teleport version 2>/dev/null | head -1)"
+  else
+    log "[!] Teleport is NOT installed"
+    log ""
+    printf "Install Teleport now? [Y/n]: "
+    set +e
+    IFS= read -r do_install <&"$prompt_fd"
+    set -e
+    if [[ -z "$do_install" || "$do_install" =~ ^[Yy] ]]; then
+      do_install
+      teleport_installed=1
+    else
+      log "Skipping Teleport installation."
+    fi
+  fi
+
+  # Step 2: Show current config & labels (if installed)
+  local cfg=""
+  if [[ $teleport_installed -eq 1 ]]; then
+    log ""
+    log "--- Current Configuration ---"
+    cfg=$(find_config "" 2>/dev/null || echo "")
+    if [[ -n "$cfg" && -f "$cfg" ]]; then
+      log "Config file: $cfg"
+      log ""
+      require_cmd python3
+      ensure_pyyaml
+      list_all_sections "$cfg"
+    else
+      log "No config file found yet."
+    fi
+  fi
+
+  # Step 3: Set/Update labels
+  if [[ $teleport_installed -eq 1 && -n "$cfg" ]]; then
+    log ""
+    printf "Set/update standard labels (env/project/location/access)? [Y/n]: "
+    set +e
+    IFS= read -r do_labels <&"$prompt_fd"
+    set -e
+    if [[ -z "$do_labels" || "$do_labels" =~ ^[Yy] ]]; then
+      local env_arg="" project_arg="" location_arg="" access_arg=""
+      
+      log " env options: ${ALLOWED_ENV[*]}"
+      printf " env: "
+      set +e; IFS= read -r env_arg <&"$prompt_fd"; set -e
+      
+      log " project example: ${ALLOWED_PROJECT_PLACEHOLDER}"
+      printf " project: "
+      set +e; IFS= read -r project_arg <&"$prompt_fd"; set -e
+      
+      log " location options: ${ALLOWED_LOCATION[*]}"
+      printf " location: "
+      set +e; IFS= read -r location_arg <&"$prompt_fd"; set -e
+      
+      log " access options: ${ALLOWED_ACCESS[*]}"
+      printf " access: "
+      set +e; IFS= read -r access_arg <&"$prompt_fd"; set -e
+
+      if [[ -n "$env_arg" && -n "$project_arg" && -n "$location_arg" && -n "$access_arg" ]]; then
+        if require_in_set "$env_arg" "${ALLOWED_ENV[@]}" && \
+           require_in_set "$location_arg" "${ALLOWED_LOCATION[@]}" && \
+           require_in_set "$access_arg" "${ALLOWED_ACCESS[@]}"; then
+          backup_config "$cfg"
+          python_set_standard "$env_arg" "$project_arg" "$location_arg" "$access_arg" "$cfg" "ssh_service"
+          local svc
+          svc=$(find_service "")
+          restart_service "$svc"
+          log "Labels updated!"
+        else
+          log "Invalid values, skipping labels."
+        fi
+      else
+        log "Incomplete input, skipping labels."
+      fi
+    fi
+  fi
+
+  # Step 4: Check/create develop user
+  log ""
+  log "--- User Management ---"
+  if id -u develop >/dev/null 2>&1; then
+    log "[✓] User 'develop' exists"
+  else
+    log "[!] User 'develop' does NOT exist"
+    printf "Create 'develop' user with sudo? [Y/n]: "
+    set +e
+    IFS= read -r do_user <&"$prompt_fd"
+    set -e
+    if [[ -z "$do_user" || "$do_user" =~ ^[Yy] ]]; then
+      create_develop_user "" 1
+      log "User 'develop' created with sudo access."
+    else
+      log "Skipping user creation."
+    fi
+  fi
+
+  # Step 5: Show snapshot (users & keys)
+  log ""
+  printf "Show all users and SSH keys? [Y/n]: "
+  set +e
+  IFS= read -r do_snapshot <&"$prompt_fd"
+  set -e
+  if [[ -z "$do_snapshot" || "$do_snapshot" =~ ^[Yy] ]]; then
+    require_cmd getent
+    snapshot_users_and_keys
+  fi
+
+  # Done
+  log ""
+  log "===== Setup Complete ====="
+  if [[ $teleport_installed -eq 1 ]]; then
+    log "Check status: systemctl status teleport"
+  fi
 }
 
 main() {
@@ -943,19 +1037,14 @@ main() {
   check_supported_os
   ensure_log_file
 
-  local cmd=""
-  
-  # If no arguments, show interactive menu
+  # If no arguments, run interactive wizard
   if [[ $# -lt 1 ]]; then
-    cmd=$(show_main_menu)
-    if [[ "$cmd" == "exit" ]]; then
-      log "Bye!"
-      exit 0
-    fi
-  else
-    cmd="$1"; shift || true
+    run_wizard
+    exit 0
   fi
 
+  # Otherwise process commands (for Ansible/automation)
+  local cmd="$1"; shift || true
   local cfg_override=""
   local svc_override=""
   local dry_run=0
