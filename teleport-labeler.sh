@@ -1058,6 +1058,7 @@ run_wizard() {
         IFS= read -r remove_choice <&"$prompt_fd"
         set -e
         
+        local did_remove=0
         if [[ "$remove_choice" =~ ^[Aa]$ ]]; then
           # Remove all labels
           backup_config "$cfg"
@@ -1066,6 +1067,7 @@ run_wizard() {
             python_edit "remove" "$key" "$cfg" "ssh_service"
           done
           log "[✓] All labels removed."
+          did_remove=1
         elif [[ -n "$remove_choice" ]]; then
           backup_config "$cfg"
           IFS=',' read -ra choices <<< "$remove_choice"
@@ -1076,9 +1078,20 @@ run_wizard() {
               local key="${lbl%%=*}"
               python_edit "remove" "$key" "$cfg" "ssh_service"
               log "  Removed: $key"
+              did_remove=1
             fi
           done
           log "[✓] Selected labels removed."
+        fi
+        
+        # Restart service after removing labels
+        if [[ $did_remove -eq 1 ]]; then
+          local svc
+          svc=$(find_service "")
+          log "Restarting $svc to apply changes..."
+          set +e
+          restart_service "$svc"
+          set -e
         fi
       else
         log "(no labels to remove)"
