@@ -26,7 +26,7 @@ CANDIDATE_CONFIGS=(
 )
 ALLOWED_ENV=(prod stage dev lab)
 ALLOWED_PROJECT_PLACEHOLDER="customer-xyz|bluepolicy|teleport|..."
-ALLOWED_LOCATION=(col fra azure-westeu home)
+ALLOWED_LOCATION=(col cologne fra frankfurt azure-westeu home)
 ALLOWED_ACCESS=(dev admin-only)
 SECTION_MAP_ssh="ssh_service"
 SECTION_MAP_app="app_service"
@@ -1053,9 +1053,20 @@ run_wizard() {
       set +e; IFS= read -r access_arg <&"$prompt_fd"; set -e
 
       if [[ -n "$env_arg" && -n "$project_arg" && -n "$location_arg" && -n "$access_arg" ]]; then
-        if require_in_set "$env_arg" "${ALLOWED_ENV[@]}" && \
-           require_in_set "$location_arg" "${ALLOWED_LOCATION[@]}" && \
-           require_in_set "$access_arg" "${ALLOWED_ACCESS[@]}"; then
+        local valid=1
+        if ! require_in_set "$env_arg" "${ALLOWED_ENV[@]}"; then
+          log "[!] Invalid env '$env_arg'. Allowed: ${ALLOWED_ENV[*]}"
+          valid=0
+        fi
+        if ! require_in_set "$location_arg" "${ALLOWED_LOCATION[@]}"; then
+          log "[!] Invalid location '$location_arg'. Allowed: ${ALLOWED_LOCATION[*]}"
+          valid=0
+        fi
+        if ! require_in_set "$access_arg" "${ALLOWED_ACCESS[@]}"; then
+          log "[!] Invalid access '$access_arg'. Allowed: ${ALLOWED_ACCESS[*]}"
+          valid=0
+        fi
+        if [[ $valid -eq 1 ]]; then
           backup_config "$cfg"
           python_set_standard "$env_arg" "$project_arg" "$location_arg" "$access_arg" "$cfg" "ssh_service"
           local svc
@@ -1063,7 +1074,7 @@ run_wizard() {
           restart_service "$svc"
           log "Labels updated!"
         else
-          log "Invalid values, skipping labels."
+          log "Skipping labels due to invalid values."
         fi
       else
         log "Incomplete input, skipping labels."
