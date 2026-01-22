@@ -475,6 +475,35 @@ snapshot_users_and_keys() {
   local ts host
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   host=$(hostname -f 2>/dev/null || hostname)
+
+  # Output to screen
+  log "===== Snapshot: ${ts} ${host} ====="
+  log ""
+  log "[Users] (user:uid:home:shell)"
+  getent passwd | awk -F: '$3 >= 1000 || $1 == "root" {print "  "$1":"$3":"$6":"$7}'
+  log ""
+  log "[Authorized SSH Keys]"
+  local found_keys=0
+  while IFS=: read -r user _ uid gid home shell; do
+    if [[ -f "$home/.ssh/authorized_keys" ]]; then
+      log "  -- ${user} (${home}/.ssh/authorized_keys):"
+      sed 's/^/     /' "$home/.ssh/authorized_keys"
+      found_keys=1
+    fi
+  done < <(getent passwd)
+  if [[ $found_keys -eq 0 ]]; then
+    log "  (no authorized_keys found)"
+  fi
+  log ""
+  log "[Host SSH Keys]"
+  for f in /etc/ssh/*.pub; do
+    [[ -f "$f" ]] || continue
+    log "  -- $f:"
+    sed 's/^/     /' "$f"
+  done
+  log ""
+
+  # Also write to log file
   log_append "===== ${ts} ${host} ====="
   log_append "[Users]"
   getent passwd | awk -F: '{print $1":"$3":"$6":"$7}' >> "$LOG_PATH"
