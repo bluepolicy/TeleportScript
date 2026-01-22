@@ -3,6 +3,8 @@ set -euo pipefail
 
 # Teleport label manager for Debian/Ubuntu/Rocky-compatible systems (systemd).
 # Usage:
+#   sudo ./teleport-labeler.sh install [--proxy-server URL --token TOKEN --env ENV --project NAME --location LOC --access ACC]
+#        (interactive prompts if flags omitted)
 #   sudo ./teleport-labeler.sh list [--config PATH] [--service NAME] [--section ssh|app|windows|all]
 #   sudo ./teleport-labeler.sh add KEY=VALUE [--config PATH] [--service NAME] [--section ssh|app|windows] [--dry-run]
 #   sudo ./teleport-labeler.sh remove [KEY] [--config PATH] [--service NAME] [--section ssh|app|windows|all] [--dry-run]
@@ -510,6 +512,217 @@ ensure_pyyaml() {
   fi
 }
 
+# ============== INSTALL TELEPORT ==============
+
+prompt_install_inputs() {
+  local prompt_fd=0
+  if [[ ! -t 0 ]]; then
+    if [[ -e /dev/tty ]]; then
+      exec 3</dev/tty
+      prompt_fd=3
+    else
+      err "No TTY. Use --proxy-server, --token, etc."
+      exit 1
+    fi
+  fi
+
+  if [[ -z "$INSTALL_PROXY" ]]; then
+    log "Enter Teleport proxy server (e.g., teleport.example.com:443):"
+    printf " proxy: "
+    set +e
+    IFS= read -r INSTALL_PROXY <&"$prompt_fd"
+    set -e
+    if [[ -z "$INSTALL_PROXY" ]]; then
+      err "Proxy server is required"; exit 1
+    fi
+  fi
+
+  if [[ -z "$INSTALL_TOKEN" ]]; then
+    log "Enter join token:"
+    printf " token: "
+    set +e
+    IFS= read -r INSTALL_TOKEN <&"$prompt_fd"
+    set -e
+    if [[ -z "$INSTALL_TOKEN" ]]; then
+      err "Token is required"; exit 1
+    fi
+  fi
+
+  # Standard labels
+  if [[ -z "$env_arg" ]]; then
+    log " env options: ${ALLOWED_ENV[*]}"
+    printf " env: "
+    set +e
+    IFS= read -r env_arg <&"$prompt_fd"
+    set -e
+  fi
+
+  if [[ -z "$project_arg" ]]; then
+    log " project example: ${ALLOWED_PROJECT_PLACEHOLDER}"
+    printf " project: "
+    set +e
+    IFS= read -r project_arg <&"$prompt_fd"
+    set -e
+  fi
+
+  if [[ -z "$location_arg" ]]; then
+    log " location options: ${ALLOWED_LOCATION[*]}"
+    printf " location: "
+    set +e
+    IFS= read -r location_arg <&"$prompt_fd"
+    set -e
+  fi
+
+  if [[ -z "$access_arg" ]]; then
+    log " access options: ${ALLOWED_ACCESS[*]}"
+    printf " access: "
+    set +e
+    IFS= read -r access_arg <&"$prompt_fd"
+    set -e
+  fi
+}
+
+install_teleport_package() {
+  local os_type
+  os_type=$(os_id)
+
+  log "Installing Teleport package..."
+
+  case "$os_type" in
+    ubuntu|debian)
+      # Add Teleport repo
+      require_cmd curl
+      curl -fsSL https://apt.releases.teleport.dev/gpg -o /usr/share/keyrings/teleport-archive-keyring.asc
+      echo "deb [signed-by=/usr/share/keyrings/teleport-archive-keyring.asc] https://apt.releases.teleport.dev/ stable main" > /etc/apt/sources.list.d/teleport.list
+      apt-get update -y
+      apt-get install -y teleport
+      ;;
+    rocky|almalinux|centos|rhel)
+      # Add Teleport repo
+      cat > /etc/yum.repos.d/teleport.repo <<'REPOEOF'
+[teleport]
+name=Teleport
+baseurl=https://yum.releases.teleport.dev/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.releases.teleport.dev/gpg
+REPOEOF
+      if command -v dnf >/dev/null 2>&1; then
+        dnf install -y teleport
+      else
+        yum install -y teleport
+      fi
+      ;;
+    *)
+      err "Unsupported OS for auto-install: $os_type"
+      exit 1
+      ;;
+  esac
+
+  log "Teleport package installed."
+}
+
+generate_teleport_config() {
+  local proxy="$1"
+  local token="$2"
+  local env_val="$3"
+  local project_val="$4"
+  local location_val="$5"
+  local access_val="$6"
+  local nodename
+  nodename=$(hostname -f 2>/dev/null || hostname)
+
+  local config_path="/etc/teleport.yaml"
+
+  log "Generating Teleport config at $config_path..."
+
+  cat > "$config_path" <<CFGEOF
+version: v3
+teleport:
+  nodename: ${nodename}
+  data_dir: /var/lib/teleport
+  proxy_server: ${proxy}
+  auth_token: ${token}
+  log:
+    output: stderr
+    severity: INFO
+
+ssh_service:
+  enabled: true
+  labels:
+    env: ${env_val:-unknown}
+    project: ${project_val:-unknown}
+    location: ${location_val:-unknown}
+    access: ${access_val:-dev}
+
+auth_service:
+  enabled: false
+
+proxy_service:
+  enabled: false
+CFGEOF
+
+  chmod 600 "$config_path"
+  log "Config created: $config_path"
+}
+
+start_teleport_service() {
+  log "Enabling and starting Teleport service..."
+  systemctl daemon-reload
+  systemctl enable teleport.service
+  systemctl start teleport.service
+  sleep 2
+  systemctl status teleport.service --no-pager --lines=10 || true
+  log "Teleport service started."
+}
+
+do_install() {
+  log "=== Teleport Installation ==="
+
+  # Check if already installed
+  if command -v teleport >/dev/null 2>&1; then
+    log "Teleport is already installed: $(teleport version 2>/dev/null || echo 'unknown version')"
+    printf "Reinstall/reconfigure? [y/N]: "
+    local prompt_fd=0
+    if [[ ! -t 0 ]] && [[ -e /dev/tty ]]; then
+      exec 3</dev/tty
+      prompt_fd=3
+    fi
+    set +e
+    IFS= read -r confirm <&"$prompt_fd"
+    set -e
+    if [[ ! "$confirm" =~ ^[Yy] ]]; then
+      log "Aborted."
+      exit 0
+    fi
+  fi
+
+  prompt_install_inputs
+
+  # Validate labels
+  if [[ -n "$env_arg" ]] && ! require_in_set "$env_arg" "${ALLOWED_ENV[@]}"; then
+    err "Invalid env '$env_arg'. Allowed: ${ALLOWED_ENV[*]}"; exit 1
+  fi
+  if [[ -n "$location_arg" ]] && ! require_in_set "$location_arg" "${ALLOWED_LOCATION[@]}"; then
+    err "Invalid location '$location_arg'. Allowed: ${ALLOWED_LOCATION[*]}"; exit 1
+  fi
+  if [[ -n "$access_arg" ]] && ! require_in_set "$access_arg" "${ALLOWED_ACCESS[@]}"; then
+    err "Invalid access '$access_arg'. Allowed: ${ALLOWED_ACCESS[*]}"; exit 1
+  fi
+
+  install_teleport_package
+  generate_teleport_config "$INSTALL_PROXY" "$INSTALL_TOKEN" "$env_arg" "$project_arg" "$location_arg" "$access_arg"
+  start_teleport_service
+
+  log ""
+  log "=== Installation complete ==="
+  log "Node should appear in Teleport cluster shortly."
+  log "Config: /etc/teleport.yaml"
+  log "Check status: systemctl status teleport"
+}
+
+# ============== END INSTALL ==============
+
 backup_config() {
   local path="$1"
   local ts
@@ -653,7 +866,7 @@ main() {
   ensure_log_file
 
   if [[ $# -lt 1 ]]; then
-    err "Usage: $0 <list|add|remove|set-standard|snapshot|create-develop|show-config> ..."
+    err "Usage: $0 <install|list|add|remove|set-standard|snapshot|create-develop|show-config> ..."
     exit 1
   fi
 
@@ -668,6 +881,8 @@ main() {
   local location_arg=""
   local access_arg=""
   local section_name=""
+  INSTALL_PROXY=""
+  INSTALL_TOKEN=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --config)
@@ -690,11 +905,18 @@ main() {
         access_arg="$2"; shift 2;;
       --section)
         section_name="$2"; shift 2;;
+      --proxy-server)
+        INSTALL_PROXY="$2"; shift 2;;
+      --token)
+        INSTALL_TOKEN="$2"; shift 2;;
       *) break;;
     esac
   done
 
   case "$cmd" in
+    install)
+      do_install
+      exit 0;;
     snapshot)
       require_cmd getent
       snapshot_users_and_keys
