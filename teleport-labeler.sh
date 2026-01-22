@@ -274,46 +274,47 @@ PY
 }
 
 python_set_standard() {
-  local env="$1"
-  local project="$2"
-  local location="$3"
-  local access="$4"
-  local path="$5"
-  local section="$6"
-  python3 - "$env" "$project" "$location" "$access" "$path" "$section" <<'PY'
-import sys
-import yaml
+  local prompt_fd=0
+  if [[ ! -t 0 ]]; then
+    if [[ -r /dev/tty ]]; then
+      exec 3</dev/tty
+      prompt_fd=3
+    else
+      err "No TTY available for prompts. Provide --env/--project/--location/--access flags."
+      exit 1
+    fi
+  fi
 from pathlib import Path
 
 env, project, location, access, path, section = sys.argv[1:7]
-cfg_path = Path(path)
-if not cfg_path.exists():
-    sys.exit(f"Config not found: {path}")
-
+  set +e
+  read -r -u "$prompt_fd" -p " env: " env_arg
+  local rc=$?
+  set -e
 data = yaml.safe_load(cfg_path.read_text()) or {}
 svc = data.get(section, {})
 labels = svc.get("labels", {})
 if labels is None:
-    labels = {}
-if not isinstance(labels, dict):
-    sys.exit(f"labels must be a mapping in {section}")
-
+  set +e
+  read -r -u "$prompt_fd" -p " project: " project_arg
+  rc=$?
+  set -e
 labels.update({
     "env": env,
     "project": project,
     "location": location,
-    "access": access,
-})
-svc["labels"] = labels
-data[section] = svc
+  set +e
+  read -r -u "$prompt_fd" -p " location: " location_arg
+  rc=$?
+  set -e
 
 cfg_path.write_text(yaml.safe_dump(data, default_flow_style=False, sort_keys=False))
 PY
 }
-
-restart_service() {
-  local svc="$1"
-  if command -v systemctl >/dev/null 2>&1; then
+  set +e
+  read -r -u "$prompt_fd" -p " access: " access_arg
+  rc=$?
+  set -e
     systemctl restart "$svc"
     systemctl status "$svc" --no-pager --lines=5 || true
   else
