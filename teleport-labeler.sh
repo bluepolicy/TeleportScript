@@ -8,7 +8,7 @@ set -euo pipefail
 #   sudo ./teleport-labeler.sh remove KEY [--config PATH] [--service NAME] [--dry-run]
 #   sudo ./teleport-labeler.sh snapshot
 #   sudo ./teleport-labeler.sh create-develop [--ssh-key "ssh-ed25519 AAA..."] [--no-sudo]
-#   sudo ./teleport-labeler.sh set-standard --env ENV --project NAME --location LOCATION --access ACCESS [--config PATH] [--service NAME] [--dry-run]
+#   sudo ./teleport-labeler.sh set-standard [--env ENV --project NAME --location LOCATION --access ACCESS] [--config PATH] [--service NAME] [--dry-run]
 #
 # Defaults: auto-detect config path and systemd service name.
 
@@ -123,6 +123,25 @@ require_in_set() {
     fi
   done
   return 1
+}
+
+prompt_standard_inputs() {
+  log "Enter standard labels (leave blank to cancel):"
+  log " env options: ${ALLOWED_ENV[*]}"
+  read -r -p " env: " env_arg || exit 1
+  [[ -z "$env_arg" ]] && err "env is required" && exit 1
+
+  log " project example: ${ALLOWED_PROJECT_PLACEHOLDER}"
+  read -r -p " project: " project_arg || exit 1
+  [[ -z "$project_arg" ]] && err "project is required" && exit 1
+
+  log " location options: ${ALLOWED_LOCATION[*]}"
+  read -r -p " location: " location_arg || exit 1
+  [[ -z "$location_arg" ]] && err "location is required" && exit 1
+
+  log " access options: ${ALLOWED_ACCESS[*]}"
+  read -r -p " access: " access_arg || exit 1
+  [[ -z "$access_arg" ]] && err "access is required" && exit 1
 }
 
 snapshot_users_and_keys() {
@@ -390,11 +409,7 @@ main() {
 
   if [[ "$cmd" == "set-standard" ]]; then
     if [[ -z "$env_arg" || -z "$project_arg" || -z "$location_arg" || -z "$access_arg" ]]; then
-      err "set-standard requires --env --project --location --access"
-      err "Allowed env: ${ALLOWED_ENV[*]}"
-      err "Allowed location: ${ALLOWED_LOCATION[*]}"
-      err "Allowed access: ${ALLOWED_ACCESS[*]}"
-      exit 1
+      prompt_standard_inputs
     fi
     if ! require_in_set "$env_arg" "${ALLOWED_ENV[@]}"; then
       err "Invalid env '$env_arg'. Allowed: ${ALLOWED_ENV[*]}"; exit 1; fi

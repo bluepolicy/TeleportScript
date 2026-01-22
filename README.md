@@ -18,7 +18,7 @@ Swap `list` for other commands below. Set `LOG_PATH` env to override the log loc
 - Remove label: `sudo ./teleport-labeler.sh remove env [--config PATH] [--service NAME] [--dry-run]`
 - Snapshot users and SSH keys to log: `sudo ./teleport-labeler.sh snapshot`
 - Ensure `develop` user: `sudo ./teleport-labeler.sh create-develop [--ssh-key "ssh-ed25519 AAA..."] [--no-sudo]`
-- Apply standard label set: `sudo ./teleport-labeler.sh set-standard --env ENV --project NAME --location LOCATION --access ACCESS [--config PATH] [--service NAME] [--dry-run]`
+- Apply standard label set: `sudo ./teleport-labeler.sh set-standard [--env ENV --project NAME --location LOCATION --access ACCESS] [--config PATH] [--service NAME] [--dry-run]` (omitting values triggers interactive prompts)
 
 ## What it does
 
