@@ -1056,11 +1056,26 @@ run_wizard() {
       # Accept any value - suggestions are just hints
       if [[ -n "$env_arg" && -n "$project_arg" && -n "$location_arg" && -n "$access_arg" ]]; then
         backup_config "$cfg"
+        set +e
         python_set_standard "$env_arg" "$project_arg" "$location_arg" "$access_arg" "$cfg" "ssh_service"
-        local svc
-        svc=$(find_service "")
-        restart_service "$svc"
-        log "Labels updated!"
+        local py_exit=$?
+        set -e
+        if [[ $py_exit -ne 0 ]]; then
+          log "[!] Failed to update labels in config (exit code: $py_exit)"
+        else
+          local svc
+          svc=$(find_service "")
+          set +e
+          restart_service "$svc"
+          local restart_exit=$?
+          set -e
+          if [[ $restart_exit -ne 0 ]]; then
+            log "[!] Service restart failed (exit code: $restart_exit)"
+            log "    Check: systemctl status $svc"
+          else
+            log "[✓] Labels updated!"
+          fi
+        fi
       else
         log "Incomplete input (all 4 required), skipping labels."
       fi
