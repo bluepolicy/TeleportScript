@@ -66,7 +66,8 @@ os_id() {
 }
 
 check_supported_os() {
-  local id=$(os_id)
+  local id
+  id=$(os_id)
   for os in "${SUPPORTED_OS[@]}"; do
     if [[ "$id" == "$os" ]]; then
       return 0
@@ -140,37 +141,63 @@ resolve_section() {
 }
 
 prompt_standard_inputs() {
-  local prompt_src=""
-  if [[ -t 0 ]]; then
-    prompt_src="/dev/stdin"
-  elif [[ -r /dev/tty ]]; then
-    prompt_src="/dev/tty"
-  else
-    err "No TTY available for prompts. Provide --env/--project/--location/--access flags."
-    exit 1
+  local prompt_fd=0
+  if [[ ! -t 0 ]]; then
+    if [[ -e /dev/tty ]]; then
+      exec 3</dev/tty
+      prompt_fd=3
+    else
+      err "No TTY available for prompts. Provide --env/--project/--location/--access flags."
+      exit 1
+    fi
   fi
 
   log "Enter standard labels (leave blank to cancel):"
   log " env options: ${ALLOWED_ENV[*]}"
-  read -r -p " env: " env_arg < "$prompt_src" || exit 1
-  [[ -z "$env_arg" ]] && err "env is required" && exit 1
+  printf " env: "
+  set +e
+  IFS= read -r env_arg <&"$prompt_fd"
+  local rc=$?
+  set -e
+  if [[ $rc -ne 0 || -z "$env_arg" ]]; then
+    err "env is required (pass --env if piping without TTY)"; exit 1
+  fi
 
   log " project example: ${ALLOWED_PROJECT_PLACEHOLDER}"
-  read -r -p " project: " project_arg < "$prompt_src" || exit 1
-  [[ -z "$project_arg" ]] && err "project is required" && exit 1
+  printf " project: "
+  set +e
+  IFS= read -r project_arg <&"$prompt_fd"
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 || -z "$project_arg" ]]; then
+    err "project is required (pass --project if piping without TTY)"; exit 1
+  fi
 
   log " location options: ${ALLOWED_LOCATION[*]}"
-  read -r -p " location: " location_arg < "$prompt_src" || exit 1
-  [[ -z "$location_arg" ]] && err "location is required" && exit 1
+  printf " location: "
+  set +e
+  IFS= read -r location_arg <&"$prompt_fd"
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 || -z "$location_arg" ]]; then
+    err "location is required (pass --location if piping without TTY)"; exit 1
+  fi
 
   log " access options: ${ALLOWED_ACCESS[*]}"
-  read -r -p " access: " access_arg < "$prompt_src" || exit 1
-  [[ -z "$access_arg" ]] && err "access is required" && exit 1
+  printf " access: "
+  set +e
+  IFS= read -r access_arg <&"$prompt_fd"
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 || -z "$access_arg" ]]; then
+    err "access is required (pass --access if piping without TTY)"; exit 1
+  fi
 }
 
 snapshot_users_and_keys() {
-  local ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  local host=$(hostname -f 2>/dev/null || hostname)
+  local ts host
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  host=$(hostname -f 2>/dev/null || hostname)
   log_append "===== ${ts} ${host} ====="
   log_append "[Users]"
   getent passwd | awk -F: '{print $1":"$3":"$6":"$7}' >> "$LOG_PATH"
@@ -191,14 +218,7 @@ snapshot_users_and_keys() {
 }
 
 ensure_pyyaml() {
-  python3 - <<'PY' 2>/dev/null
-import sys
-try:
-    import yaml  # type: ignore
-except Exception:
-    sys.exit(1)
-PY
-  if [[ $? -eq 0 ]]; then
+  if python3 -c 'import yaml' 2>/dev/null; then
     return 0
   fi
   log "python3-yaml not found; attempting install..."
@@ -217,17 +237,18 @@ PY
 
 backup_config() {
   local path="$1"
-  local ts=$(date +%Y%m%d-%H%M%S)
+  local ts
+  ts=$(date +%Y%m%d-%H%M%S)
   cp "$path" "${path}.bak.${ts}"
   log "Backup created: ${path}.bak.${ts}"
 }
 
 python_edit() {
-  local action="$1" # list|add|remove
-  local arg="$2"    # key=value or key or empty
+  local action="$1"
+  local arg="$2"
   local path="$3"
   local section="$4"
-  python3 - "$action" "$arg" "$path" "$section" <<'PY'
+  python3 - "$action" "$arg" "$path" "$section" <<'PYEOF'
 import sys
 import yaml
 from pathlib import Path
@@ -270,51 +291,50 @@ else:
     sys.exit("unknown action")
 
 cfg_path.write_text(yaml.safe_dump(data, default_flow_style=False, sort_keys=False))
-PY
+PYEOF
 }
 
 python_set_standard() {
-  local prompt_fd=0
-  if [[ ! -t 0 ]]; then
-    if [[ -r /dev/tty ]]; then
-      exec 3</dev/tty
-      prompt_fd=3
-    else
-      err "No TTY available for prompts. Provide --env/--project/--location/--access flags."
-      exit 1
-    fi
-  fi
+  local env_val="$1"
+  local project_val="$2"
+  local location_val="$3"
+  local access_val="$4"
+  local path="$5"
+  local section="$6"
+  python3 - "$env_val" "$project_val" "$location_val" "$access_val" "$path" "$section" <<'PYEOF'
+import sys
+import yaml
 from pathlib import Path
 
-env, project, location, access, path, section = sys.argv[1:7]
-  set +e
-  read -r -u "$prompt_fd" -p " env: " env_arg
-  local rc=$?
-  set -e
+env_val, project_val, location_val, access_val, path, section = sys.argv[1:7]
+cfg_path = Path(path)
+if not cfg_path.exists():
+    sys.exit(f"Config not found: {path}")
+
 data = yaml.safe_load(cfg_path.read_text()) or {}
 svc = data.get(section, {})
 labels = svc.get("labels", {})
 if labels is None:
-  set +e
-  read -r -u "$prompt_fd" -p " project: " project_arg
-  rc=$?
-  set -e
+    labels = {}
+if not isinstance(labels, dict):
+    sys.exit(f"labels must be a mapping in {section}")
+
 labels.update({
-    "env": env,
-    "project": project,
-    "location": location,
-  set +e
-  read -r -u "$prompt_fd" -p " location: " location_arg
-  rc=$?
-  set -e
+    "env": env_val,
+    "project": project_val,
+    "location": location_val,
+    "access": access_val,
+})
+svc["labels"] = labels
+data[section] = svc
 
 cfg_path.write_text(yaml.safe_dump(data, default_flow_style=False, sort_keys=False))
-PY
+PYEOF
 }
-  set +e
-  read -r -u "$prompt_fd" -p " access: " access_arg
-  rc=$?
-  set -e
+
+restart_service() {
+  local svc="$1"
+  if command -v systemctl >/dev/null 2>&1; then
     systemctl restart "$svc"
     systemctl status "$svc" --no-pager --lines=5 || true
   else
@@ -324,7 +344,7 @@ PY
 
 create_develop_user() {
   local ssh_key="$1"
-  local grant_sudo="$2" # 1=yes 0=no
+  local grant_sudo="$2"
   require_cmd useradd
   require_cmd passwd
   require_cmd getent
@@ -380,36 +400,19 @@ main() {
       --service)
         svc_override="$2"; shift 2;;
       --dry-run)
-    set +e
-    read -r -p " env: " env_arg < "$prompt_src"
-    local rc=$?
-    set -e
-    if [[ $rc -ne 0 || -z "$env_arg" ]]; then
-      err "env is required (pass --env if piping without TTY)"; exit 1; fi
+        dry_run=1; shift;;
       --ssh-key)
         ssh_key_arg="$2"; shift 2;;
-    set +e
-    read -r -p " project: " project_arg < "$prompt_src"
-    rc=$?
-    set -e
-    if [[ $rc -ne 0 || -z "$project_arg" ]]; then
-      err "project is required (pass --project if piping without TTY)"; exit 1; fi
+      --no-sudo)
+        grant_sudo=0; shift;;
       --env)
         env_arg="$2"; shift 2;;
-    set +e
-    read -r -p " location: " location_arg < "$prompt_src"
-    rc=$?
-    set -e
-    if [[ $rc -ne 0 || -z "$location_arg" ]]; then
-      err "location is required (pass --location if piping without TTY)"; exit 1; fi
+      --project)
+        project_arg="$2"; shift 2;;
       --location)
         location_arg="$2"; shift 2;;
-    set +e
-    read -r -p " access: " access_arg < "$prompt_src"
-    rc=$?
-    set -e
-    if [[ $rc -ne 0 || -z "$access_arg" ]]; then
-      err "access is required (pass --access if piping without TTY)"; exit 1; fi
+      --access)
+        access_arg="$2"; shift 2;;
       --section)
         section_name="$2"; shift 2;;
       *) break;;
@@ -429,7 +432,8 @@ main() {
       log "User develop ensured. Details logged to $LOG_PATH"
       exit 0;;
     show-config)
-      local cfg_show=$(find_config "$cfg_override")
+      local cfg_show
+      cfg_show=$(find_config "$cfg_override")
       log "Config: $cfg_show"
       cat "$cfg_show"
       exit 0;;
@@ -457,22 +461,27 @@ main() {
       exit 1;;
   esac
 
-  local cfg=$(find_config "$cfg_override")
-  local svc=$(find_service "$svc_override")
-  local section=$(resolve_section "$section_name")
+  local cfg svc section
+  cfg=$(find_config "$cfg_override")
+  svc=$(find_service "$svc_override")
+  section=$(resolve_section "$section_name")
 
   if [[ "$cmd" == "set-standard" ]]; then
     if [[ -z "$env_arg" || -z "$project_arg" || -z "$location_arg" || -z "$access_arg" ]]; then
       prompt_standard_inputs
     fi
     if ! require_in_set "$env_arg" "${ALLOWED_ENV[@]}"; then
-      err "Invalid env '$env_arg'. Allowed: ${ALLOWED_ENV[*]}"; exit 1; fi
+      err "Invalid env '$env_arg'. Allowed: ${ALLOWED_ENV[*]}"; exit 1
+    fi
     if ! require_in_set "$location_arg" "${ALLOWED_LOCATION[@]}"; then
-      err "Invalid location '$location_arg'. Allowed: ${ALLOWED_LOCATION[*]}"; exit 1; fi
+      err "Invalid location '$location_arg'. Allowed: ${ALLOWED_LOCATION[*]}"; exit 1
+    fi
     if ! require_in_set "$access_arg" "${ALLOWED_ACCESS[@]}"; then
-      err "Invalid access '$access_arg'. Allowed: ${ALLOWED_ACCESS[*]}"; exit 1; fi
+      err "Invalid access '$access_arg'. Allowed: ${ALLOWED_ACCESS[*]}"; exit 1
+    fi
     if [[ -z "$project_arg" ]]; then
-      err "project cannot be empty (e.g., bluepolicy|teleport|customer-xyz)"; exit 1; fi
+      err "project cannot be empty (e.g., bluepolicy|teleport|customer-xyz)"; exit 1
+    fi
     backup_config "$cfg"
     python_set_standard "$env_arg" "$project_arg" "$location_arg" "$access_arg" "$cfg" "$section"
     if [[ $dry_run -eq 1 ]]; then
