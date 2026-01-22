@@ -1027,8 +1027,64 @@ run_wizard() {
     fi
   fi
 
-  # Step 3: Set/Update labels
+  # Step 3: Manage labels
   if [[ $teleport_installed -eq 1 && -n "$cfg" ]]; then
+    log ""
+    
+    # First ask if user wants to remove old labels
+    printf "Remove existing labels first? [y/N]: "
+    set +e
+    IFS= read -r do_remove <&"$prompt_fd"
+    set -e
+    if [[ "$do_remove" =~ ^[Yy] ]]; then
+      # Show current labels and let user pick which to remove
+      log ""
+      log "Current labels:"
+      local -a label_list=()
+      local label_i=1
+      while IFS= read -r label_line; do
+        if [[ -n "$label_line" && "$label_line" != "(no labels set)" ]]; then
+          log "  [$label_i] $label_line"
+          label_list+=("$label_line")
+          ((label_i++))
+        fi
+      done < <(get_labels_list "$cfg" "ssh_service")
+      
+      if [[ ${#label_list[@]} -gt 0 ]]; then
+        log "  [a] Remove ALL labels"
+        log ""
+        printf "Enter numbers to remove (comma-separated, or 'a' for all): "
+        set +e
+        IFS= read -r remove_choice <&"$prompt_fd"
+        set -e
+        
+        if [[ "$remove_choice" =~ ^[Aa]$ ]]; then
+          # Remove all labels
+          backup_config "$cfg"
+          for lbl in "${label_list[@]}"; do
+            local key="${lbl%%=*}"
+            python_edit "remove" "$key" "$cfg" "ssh_service"
+          done
+          log "[✓] All labels removed."
+        elif [[ -n "$remove_choice" ]]; then
+          backup_config "$cfg"
+          IFS=',' read -ra choices <<< "$remove_choice"
+          for choice in "${choices[@]}"; do
+            choice=$(echo "$choice" | tr -d ' ')
+            if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#label_list[@]} )); then
+              local lbl="${label_list[$((choice-1))]}"
+              local key="${lbl%%=*}"
+              python_edit "remove" "$key" "$cfg" "ssh_service"
+              log "  Removed: $key"
+            fi
+          done
+          log "[✓] Selected labels removed."
+        fi
+      else
+        log "(no labels to remove)"
+      fi
+    fi
+    
     log ""
     printf "Set/update standard labels (env/project/location/access)? [Y/n]: "
     set +e
