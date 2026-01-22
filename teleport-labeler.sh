@@ -3,10 +3,10 @@ set -euo pipefail
 
 # Teleport label manager for Debian/Ubuntu/Rocky-compatible systems (systemd).
 # Usage:
-#   sudo ./teleport-labeler.sh list [--config PATH] [--service NAME] [--section ssh|app|windows]
+#   sudo ./teleport-labeler.sh list [--config PATH] [--service NAME] [--section ssh|app|windows|all]
 #   sudo ./teleport-labeler.sh add KEY=VALUE [--config PATH] [--service NAME] [--section ssh|app|windows] [--dry-run]
-#   sudo ./teleport-labeler.sh remove [KEY] [--config PATH] [--service NAME] [--section ssh|app|windows] [--dry-run]
-#        (without KEY: interactive selection)
+#   sudo ./teleport-labeler.sh remove [KEY] [--config PATH] [--service NAME] [--section ssh|app|windows|all] [--dry-run]
+#        (without KEY: interactive selection; --section all: pick section first)
 #   sudo ./teleport-labeler.sh snapshot
 #   sudo ./teleport-labeler.sh create-develop [--ssh-key "ssh-ed25519 AAA..."] [--no-sudo]
 #   sudo ./teleport-labeler.sh set-standard [--env ENV --project NAME --location LOCATION --access ACCESS] [--config PATH] [--service NAME] [--section ssh|app|windows] [--dry-run]
@@ -135,10 +135,69 @@ resolve_section() {
     ""|ssh) echo "$SECTION_MAP_ssh";;
     app) echo "$SECTION_MAP_app";;
     windows) echo "$SECTION_MAP_windows";;
+    all) echo "all";;
     *)
-      err "Unknown section '$name'. Allowed: ssh, app, windows"
+      err "Unknown section '$name'. Allowed: ssh, app, windows, all"
       exit 1;;
   esac
+}
+
+# List all sections that exist in config with labels
+get_all_sections_with_labels() {
+  local path="$1"
+  python3 - "$path" <<'PYEOF'
+import sys
+import yaml
+from pathlib import Path
+
+path = sys.argv[1]
+cfg_path = Path(path)
+if not cfg_path.exists():
+    sys.exit(1)
+data = yaml.safe_load(cfg_path.read_text()) or {}
+
+sections = ["ssh_service", "app_service", "windows_desktop_service"]
+for sec in sections:
+    svc = data.get(sec, {})
+    labels = svc.get("labels", {})
+    if labels and isinstance(labels, dict):
+        print(sec)
+PYEOF
+}
+
+# List labels from all sections
+list_all_sections() {
+  local path="$1"
+  python3 - "$path" <<'PYEOF'
+import sys
+import yaml
+from pathlib import Path
+
+path = sys.argv[1]
+cfg_path = Path(path)
+if not cfg_path.exists():
+    sys.exit(f"Config not found: {path}")
+data = yaml.safe_load(cfg_path.read_text()) or {}
+
+section_names = {
+    "ssh_service": "SSH Tunnel",
+    "app_service": "App/Web Tunnel", 
+    "windows_desktop_service": "Windows RDP"
+}
+
+found_any = False
+for sec, name in section_names.items():
+    svc = data.get(sec, {})
+    labels = svc.get("labels", {})
+    if labels and isinstance(labels, dict):
+        found_any = True
+        print(f"\n[{name}] ({sec}):")
+        for k, v in labels.items():
+            print(f"  {k}={v}")
+
+if not found_any:
+    print("(no labels found in any section)")
+PYEOF
 }
 
 prompt_standard_inputs() {
@@ -227,19 +286,59 @@ prompt_remove_labels() {
       exec 3</dev/tty
       prompt_fd=3
     else
-      err "No TTY available for interactive removal. Use: remove KEY"
+      err "No TTY available for interactive removal. Use: remove KEY --section ssh|app|windows"
       exit 1
     fi
   fi
 
-  # Get current labels
+  # If section is "all" or we want to show everything, let user pick section first
+  if [[ "$section" == "all" ]]; then
+    log "Sections with labels:"
+    local -a available_sections=()
+    local sec_i=1
+    while IFS= read -r sec; do
+      case "$sec" in
+        ssh_service) log "  [$sec_i] SSH Tunnel (ssh_service)";;
+        app_service) log "  [$sec_i] App/Web Tunnel (app_service)";;
+        windows_desktop_service) log "  [$sec_i] Windows RDP (windows_desktop_service)";;
+      esac
+      available_sections+=("$sec")
+      ((sec_i++))
+    done < <(get_all_sections_with_labels "$path")
+
+    if [[ ${#available_sections[@]} -eq 0 ]]; then
+      log "No sections with labels found."
+      exit 0
+    fi
+
+    log ""
+    printf "Select section number: "
+    set +e
+    IFS= read -r sec_choice <&"$prompt_fd"
+    local rc=$?
+    set -e
+    if [[ $rc -ne 0 || -z "$sec_choice" ]]; then
+      log "No selection, exiting."
+      exit 0
+    fi
+    if [[ ! "$sec_choice" =~ ^[0-9]+$ ]] || (( sec_choice < 1 || sec_choice > ${#available_sections[@]} )); then
+      err "Invalid section selection"
+      exit 1
+    fi
+    section="${available_sections[$((sec_choice-1))]}"
+    SELECTED_SECTION="$section"
+  fi
+
+  # Get current labels for selected section
   local labels_output
   labels_output=$(get_labels_list "$path" "$section")
   if [[ -z "$labels_output" ]]; then
-    log "No labels to remove."
+    log "No labels in $section."
     exit 0
   fi
 
+  log ""
+  log "Labels in $section:"
   # Build array of keys
   local -a keys=()
   local -a display=()
@@ -287,7 +386,7 @@ prompt_remove_labels() {
     exit 0
   fi
 
-  # Return keys to remove (space-separated)
+  # Return keys to remove
   REMOVE_KEYS=("${to_remove[@]}")
 }
 
@@ -594,20 +693,28 @@ main() {
   fi
 
   if [[ "$cmd" == "list" ]]; then
-    python_edit list "" "$cfg" "$section"
+    if [[ "$section" == "all" ]]; then
+      list_all_sections "$cfg"
+    else
+      python_edit list "" "$cfg" "$section"
+    fi
     exit 0
   fi
 
   if [[ "$cmd" == "remove" && $interactive_remove -eq 1 ]]; then
-    log "Current labels:"
     REMOVE_KEYS=()
+    SELECTED_SECTION=""
     prompt_remove_labels "$cfg" "$section"
     if [[ ${#REMOVE_KEYS[@]} -eq 0 ]]; then
       exit 0
     fi
+    # Use selected section if user picked one interactively
+    if [[ -n "$SELECTED_SECTION" ]]; then
+      section="$SELECTED_SECTION"
+    fi
     backup_config "$cfg"
     for key in "${REMOVE_KEYS[@]}"; do
-      log "Removing: $key"
+      log "Removing: $key from $section"
       python_edit remove "$key" "$cfg" "$section"
     done
     if [[ $dry_run -eq 1 ]]; then
