@@ -912,11 +912,50 @@ run_wizard() {
   log "(Press Enter to skip any step)"
   log ""
 
-  # Step 1: Check if Teleport is installed
+  # Step 1: Check if Teleport is installed (multiple methods)
   local teleport_installed=0
-  if command -v teleport >/dev/null 2>&1; then
-    teleport_installed=1
-    log "[✓] Teleport is installed: $(teleport version 2>/dev/null | head -1)"
+  local teleport_bin=""
+  
+  # Check common locations
+  for bin in /usr/local/bin/teleport /usr/bin/teleport teleport; do
+    if command -v "$bin" >/dev/null 2>&1 || [[ -x "$bin" ]]; then
+      teleport_bin="$bin"
+      teleport_installed=1
+      break
+    fi
+  done
+  
+  # Also check if systemd service exists
+  if [[ $teleport_installed -eq 0 ]] && command -v systemctl >/dev/null 2>&1; then
+    if systemctl list-unit-files 'teleport*.service' 2>/dev/null | grep -q teleport; then
+      teleport_installed=1
+      teleport_bin="(service installed)"
+    fi
+  fi
+  
+  # Also check if config exists
+  if [[ $teleport_installed -eq 0 ]]; then
+    for cfg in "${CANDIDATE_CONFIGS[@]}"; do
+      if [[ -f "$cfg" ]]; then
+        teleport_installed=1
+        teleport_bin="(config found: $cfg)"
+        break
+      fi
+    done
+  fi
+
+  if [[ $teleport_installed -eq 1 ]]; then
+    local ver=""
+    if [[ -x "/usr/local/bin/teleport" ]]; then
+      ver=$(/usr/local/bin/teleport version 2>/dev/null | head -1 || echo "")
+    elif command -v teleport >/dev/null 2>&1; then
+      ver=$(teleport version 2>/dev/null | head -1 || echo "")
+    fi
+    if [[ -n "$ver" ]]; then
+      log "[✓] Teleport is installed: $ver"
+    else
+      log "[✓] Teleport is installed $teleport_bin"
+    fi
   else
     log "[!] Teleport is NOT installed"
     log ""
