@@ -547,13 +547,13 @@ ensure_pyyaml() {
 DEFAULT_PROXY="teleport.bluepolicy.ai:443"
 INSTALL_PROXY="${INSTALL_PROXY:-}"
 INSTALL_TOKEN="${INSTALL_TOKEN:-}"
+INSTALL_ENV="${INSTALL_ENV:-}"
+INSTALL_PROJECT="${INSTALL_PROJECT:-}"
+INSTALL_LOCATION="${INSTALL_LOCATION:-}"
+INSTALL_ACCESS="${INSTALL_ACCESS:-}"
 
 prompt_install_inputs() {
   local prompt_fd=0
-  local env_arg="${env_arg:-}"
-  local project_arg="${project_arg:-}"
-  local location_arg="${location_arg:-}"
-  local access_arg="${access_arg:-}"
   
   if [[ ! -t 0 ]]; then
     if [[ -e /dev/tty ]]; then
@@ -589,35 +589,35 @@ prompt_install_inputs() {
   fi
 
   # Standard labels
-  if [[ -z "$env_arg" ]]; then
+  if [[ -z "$INSTALL_ENV" ]]; then
     log " env options: ${ALLOWED_ENV[*]}"
     printf " env: "
     set +e
-    IFS= read -r env_arg <&"$prompt_fd"
+    IFS= read -r INSTALL_ENV <&"$prompt_fd"
     set -e
   fi
 
-  if [[ -z "$project_arg" ]]; then
+  if [[ -z "$INSTALL_PROJECT" ]]; then
     log " project example: ${ALLOWED_PROJECT_PLACEHOLDER}"
     printf " project: "
     set +e
-    IFS= read -r project_arg <&"$prompt_fd"
+    IFS= read -r INSTALL_PROJECT <&"$prompt_fd"
     set -e
   fi
 
-  if [[ -z "$location_arg" ]]; then
+  if [[ -z "$INSTALL_LOCATION" ]]; then
     log " location options: ${ALLOWED_LOCATION[*]}"
     printf " location: "
     set +e
-    IFS= read -r location_arg <&"$prompt_fd"
+    IFS= read -r INSTALL_LOCATION <&"$prompt_fd"
     set -e
   fi
 
-  if [[ -z "$access_arg" ]]; then
+  if [[ -z "$INSTALL_ACCESS" ]]; then
     log " access options: ${ALLOWED_ACCESS[*]}"
     printf " access: "
     set +e
-    IFS= read -r access_arg <&"$prompt_fd"
+    IFS= read -r INSTALL_ACCESS <&"$prompt_fd"
     set -e
   fi
 }
@@ -739,19 +739,10 @@ do_install() {
 
   prompt_install_inputs
 
-  # Validate labels
-  if [[ -n "$env_arg" ]] && ! require_in_set "$env_arg" "${ALLOWED_ENV[@]}"; then
-    err "Invalid env '$env_arg'. Allowed: ${ALLOWED_ENV[*]}"; exit 1
-  fi
-  if [[ -n "$location_arg" ]] && ! require_in_set "$location_arg" "${ALLOWED_LOCATION[@]}"; then
-    err "Invalid location '$location_arg'. Allowed: ${ALLOWED_LOCATION[*]}"; exit 1
-  fi
-  if [[ -n "$access_arg" ]] && ! require_in_set "$access_arg" "${ALLOWED_ACCESS[@]}"; then
-    err "Invalid access '$access_arg'. Allowed: ${ALLOWED_ACCESS[*]}"; exit 1
-  fi
+  # Labels are optional for install - no validation needed (suggestions only)
 
   install_teleport_package
-  generate_teleport_config "$INSTALL_PROXY" "$INSTALL_TOKEN" "$env_arg" "$project_arg" "$location_arg" "$access_arg"
+  generate_teleport_config "$INSTALL_PROXY" "$INSTALL_TOKEN" "$INSTALL_ENV" "$INSTALL_PROJECT" "$INSTALL_LOCATION" "$INSTALL_ACCESS"
   start_teleport_service
 
   log ""
